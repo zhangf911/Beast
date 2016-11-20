@@ -14,6 +14,7 @@
 #include <beast/core/detail/type_traits.hpp>
 #include <boost/asio/buffer.hpp>
 #include <boost/logic/tribool.hpp>
+#include <boost/optional.hpp>
 
 namespace beast {
 namespace http {
@@ -34,30 +35,47 @@ private:
 
     class reader
     {
-        value_type& sb_;
+        value_type& body_;
 
     public:
+        static bool constexpr is_direct = true;
+
+        using mutable_buffers_type =
+            typename DynamicBuffer::mutable_buffers_type;
+
         template<bool isRequest, class Fields>
         explicit
         reader(message<isRequest,
-                basic_dynabuf_body, Fields>& m) noexcept
-            : sb_(m.body)
+                basic_dynabuf_body, Fields>& msg)
+            : body_(msg.body)
         {
         }
 
         void
-        init(error_code&) noexcept
+        init()
         {
         }
 
         void
-        write(void const* data,
-            std::size_t size, error_code&) noexcept
+        init(std::uint64_t content_length)
         {
-            using boost::asio::buffer;
-            using boost::asio::buffer_copy;
-            sb_.commit(buffer_copy(
-                sb_.prepare(size), buffer(data, size)));
+        }
+
+        mutable_buffers_type
+        prepare(std::size_t n)
+        {
+            return body_.prepare(n);
+        }
+
+        void
+        commit(std::size_t n)
+        {
+            body_.commit(n);
+        }
+
+        void
+        finish()
+        {
         }
     };
 
