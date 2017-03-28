@@ -482,6 +482,9 @@ public:
                 chunk_encode_final());
             break;
         }
+
+        default:
+            break;
         }
     }
 

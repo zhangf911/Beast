@@ -281,6 +281,9 @@ consume_body(error_code& ec)
         len_ = 0;
         state_ = parse_state::chunk_header;
         break;
+
+    default:
+        break;
     }
 }
 
