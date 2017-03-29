@@ -598,7 +598,26 @@ public:
     void
     commit_body(std::size_t n);
 
-    /** Consume remaining body data.
+    /** Indicate that body octets have been consumed.
+    */
+    void
+    consume(std::size_t n)
+    {
+        BOOST_ASSERT(n <= len_);
+        BOOST_ASSERT(
+            state_ == parse_state::body ||
+            state_ == parse_state::chunk_body);
+        len_ -= n;
+        if(len_ == 0)
+        {
+            if(state_ == parse_state::body)
+                state_ = parse_state::complete;
+            else
+                state_ = parse_state::chunk_header;
+        }
+    }
+
+    /** Consume all remaining body data.
 
         This function instructs the parser to advance the
         state past any expected body octets. Callers who

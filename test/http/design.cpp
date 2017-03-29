@@ -535,6 +535,175 @@ public:
             relay<true>(os, sb, is);
         }
     }
+
+    //--------------------------------------------------------------------------
+    /*
+        Read the request header, then read the request body content using
+        a fixed-size buffer, i.e. read the body in chunks of 4k for instance.
+        The end of the body should be indicated somehow and chunk-encoding
+        should be decoded by beast.
+    */
+    template<bool isRequest,
+        class SyncReadStream, class BodyCallback>
+    void
+    doFixedRead(SyncReadStream& stream, BodyCallback const& cb)
+    {
+        flat_streambuf buf{4096, 4096}; // 4K size, 4K limit
+        header_parser<isRequest, fields> p;
+        error_code ec;
+        for(;;)
+        {
+            switch(p.state())
+            {
+            case parse_state::header:
+            case parse_state::chunk_header:
+            {
+                auto const bytes_transferred =
+                    stream.read_some(buf.prepare(
+                        buf.max_size() - buf.size()), ec);
+                if(ec == boost::asio::error::eof)
+                {
+                    if(! p.got_some())
+                        goto do_finish;
+                    ec = {};
+                    p.write_eof(ec);
+                    BEAST_EXPECTS(! ec, ec.message());
+                }
+                else
+                {   
+                    BEAST_EXPECTS(! ec, ec.message());
+                    buf.commit(bytes_transferred);
+                    auto const used = p.write(buf.data(), ec);
+                    BEAST_EXPECTS(! ec, ec.message());
+                    if(used == 0 && buf.size() == buf.max_size())
+                        throw std::length_error{"buffer overflow"};
+                    buf.consume(used);
+                }
+                break;
+            }
+
+            case parse_state::body:
+            case parse_state::chunk_body:
+            {
+                if(buf.size() > 0)
+                {
+                    auto const len =
+                        (std::min)(beast::detail::clamp(
+                            p.size()), buf.size());
+                    cb(buf, len);
+                    p.consume(len);
+                }
+                else
+                {
+                    BOOST_ASSERT(p.size() > 0);
+                    auto const len = (std::min)(
+                        beast::detail::clamp(p.size()),
+                            buf.max_size() - buf.size());
+                    auto const bytes_transferred =
+                        stream.read_some(buf.prepare(len), ec);
+                    if(ec == boost::asio::error::eof)
+                    {
+                        ec = {};
+                        p.write_eof(ec);
+                        BEAST_EXPECTS(! ec, ec.message());
+                    }
+                    else
+                    {
+                        BEAST_EXPECTS(! ec, ec.message());
+                        buf.commit(bytes_transferred);
+                    }
+                }
+                break;
+            }
+
+            case parse_state::body_to_eof:
+            {
+                if(buf.size() > 0)
+                {
+                    cb(buf, buf.size());
+                }
+                auto const bytes_transferred =
+                    stream.read_some(buf.prepare(
+                        buf.max_size() - buf.size()), ec);
+                if(ec == boost::asio::error::eof)
+                {
+                    ec = {};
+                    p.write_eof(ec);
+                    BEAST_EXPECTS(! ec, ec.message());
+                }
+                else
+                {
+                    BEAST_EXPECTS(! ec, ec.message());
+                    buf.commit(bytes_transferred);
+                }
+                break;
+            }
+
+            case parse_state::complete:
+                // all finished!
+                goto do_finish;
+            }
+        }
+    do_finish:
+        ;
+    }
+    
+    struct bodyHandler
+    {
+        template<class DynamicBuffer>
+        void
+        operator()(DynamicBuffer& buf, std::size_t len) const
+        {
+            // called for each piece of the body,
+            // There are `size` bytes in buf.data()
+            buf.consume(len);
+        }
+    };
+
+    void
+    testFixedBuffer()
+    {
+        using boost::asio::buffer;
+        using boost::asio::buffer_cast;
+        using boost::asio::buffer_size;
+
+        // Content-Length
+        {
+            test::string_istream is{ios_,
+                "GET / HTTP/1.1\r\n"
+                "Content-Length: 1\r\n"
+                "\r\n"
+                "*"
+            };
+            doFixedRead<true>(is, bodyHandler{});
+        }
+
+        // end of file
+        {
+            test::string_istream is{ios_,
+                "HTTP/1.1 200 OK\r\n"
+                "\r\n" // 19 byte header
+                "*****"
+            };
+            doFixedRead<false>(is, bodyHandler{});
+        }
+
+        // chunked
+        {
+            test::string_istream is{ios_,
+                "GET / HTTP/1.1\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+                "5;x;y=1;z=\"-\"\r\n*****\r\n"
+                "3\r\n---\r\n"
+                "1\r\n+\r\n"
+                "0\r\n\r\n",
+                2 // max_read
+            };
+            doFixedRead<true>(is, bodyHandler{});
+        }
+    }
+
     //--------------------------------------------------------------------------
 
     void
@@ -545,6 +714,7 @@ public:
         testManualBody();
         testExpect100Continue();
         testRelay();
+        testFixedBuffer();
     }
 };
 
