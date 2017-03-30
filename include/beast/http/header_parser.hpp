@@ -157,7 +157,6 @@ private:
     void
     on_header(error_code&)
     {
-        this->pause();
     }
 
     void

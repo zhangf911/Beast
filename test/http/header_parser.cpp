@@ -33,7 +33,7 @@ public:
             };
             flat_streambuf db{1024};
             header_parser<true, fields> p;
-            parse(is, db, p);
+            parse_some(is, db, p);
             BEAST_EXPECT(p.is_complete());
         }
         {
@@ -46,7 +46,7 @@ public:
             };
             flat_streambuf db{1024};
             header_parser<true, fields> p;
-            parse(is, db, p);
+            parse_some(is, db, p);
             BEAST_EXPECT(! p.is_complete());
             BEAST_EXPECT(p.state() == parse_state::body);
         }

@@ -73,16 +73,6 @@ set_option(skip_body const& opt)
 template<bool isRequest, bool isDirect, class Derived>
 bool
 basic_parser<isRequest, isDirect, Derived>::
-need_more() const
-{
-    return 
-        state_ != parse_state::complete &&
-        ((f_ & flagPaused) == 0);
-}
-
-template<bool isRequest, bool isDirect, class Derived>
-bool
-basic_parser<isRequest, isDirect, Derived>::
 is_keep_alive() const
 {
     BOOST_ASSERT(got_header());

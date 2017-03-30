@@ -48,7 +48,6 @@ class parse_some_buffer_op
             , db(db_)
             , p(p_)
         {
-            BOOST_ASSERT(p.need_more());
         }
     };
 
@@ -236,7 +235,6 @@ class parse_some_body_op
             , db(db_)
             , p(p_)
         {
-            BOOST_ASSERT(p.need_more());
         }
     };
 
@@ -376,7 +374,6 @@ class parse_op
             , db(db_)
             , p(p_)
         {
-            BOOST_ASSERT(p.need_more());
             BOOST_ASSERT(! p.is_complete());
         }
     };
@@ -452,7 +449,7 @@ operator()(error_code const& ec,
     if(! ec)
     {
         d.db.consume(bytes_used);
-        if(d.p.need_more())
+        if(! d.p.is_complete())
             return async_parse_some(
                 d.s, d.db, d.p, std::move(*this));
     }
@@ -591,7 +588,6 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
         "SyncReadStream requirements not met");
     static_assert(is_DynamicBuffer<DynamicBuffer>::value,
         "DynamicBuffer requirements not met");
-    BOOST_ASSERT(parser.need_more());
     BOOST_ASSERT(! parser.is_complete());
     switch(parser.state())
     {
@@ -707,16 +703,16 @@ parse(SyncReadStream& stream, DynamicBuffer& dynabuf,
         "SyncReadStream requirements not met");
     static_assert(is_DynamicBuffer<DynamicBuffer>::value,
         "DynamicBuffer requirements not met");
-    for(;;)
+    BOOST_ASSERT(! parser.is_complete());
+    do
     {
         auto const bytes_used =
             parse_some(stream, dynabuf, parser, ec);
         if(ec)
             return;
         dynabuf.consume(bytes_used);
-        if(! parser.need_more())
-            break;
     }
+    while(! parser.is_complete());
 }
 
 template<class AsyncReadStream, class DynamicBuffer,

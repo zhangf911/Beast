@@ -215,13 +215,14 @@ public:
         streambuf sb;
         error_code ec;
         header_parser<true, fields> p0;
-        parse(ss, sb, p0, ec);
+        auto const bytes_used =
+            parse_some(ss, sb, p0, ec);
+        sb.consume(bytes_used);
         BEAST_EXPECTS(! ec, ec.message());
         BEAST_EXPECT(p0.state() != parse_state::header);
         BEAST_EXPECT(! p0.is_complete());
         message_parser<true,
             string_body, fields> p1{std::move(p0)};
-        p1.resume();
         parse(ss, sb, p1, ec);
         BEAST_EXPECTS(! ec, ec.message());
         BEAST_EXPECT(p1.get().body == "*****");

@@ -254,7 +254,9 @@ public:
             };
             header_parser<true, fields> p;
             flat_streambuf sb{38};
-            parse(is, sb, p);
+            auto const bytes_used =
+                parse_some(is, sb, p);
+            sb.consume(bytes_used);
             BEAST_EXPECT(p.size() == 5);
             BEAST_EXPECT(sb.size() < 5);
             sb.commit(boost::asio::read(
@@ -271,7 +273,9 @@ public:
             };
             header_parser<false, fields> p;
             flat_streambuf sb{20};
-            parse(is, sb, p);
+            auto const bytes_used =
+                parse_some(is, sb, p);
+            sb.consume(bytes_used);
             BEAST_EXPECT(p.state() ==
                 parse_state::body_to_eof);
             BEAST_EXPECT(sb.size() < 5);
@@ -296,13 +300,12 @@ public:
             flat_streambuf sb{36};
 
             // Read the header
-            parse(is, sb, p);
+            auto const bytes_used =
+                parse_some(is, sb, p);
+            sb.consume(bytes_used);
             BEAST_EXPECT(p.state() ==
                 parse_state::chunk_header);
             
-            // header_parser pauses after receiving the header
-            p.resume();
-
             error_code ec;
 
             // Chunk 1
@@ -368,7 +371,9 @@ public:
 
             header_parser<true, fields> p;
             flat_streambuf sb{40};
-            parse(is, sb, p);
+            auto const bytes_used =
+                parse_some(is, sb, p);
+            sb.consume(bytes_used);
             BEAST_EXPECT(p.got_header());
             BEAST_EXPECT(
                 p.get().fields["Expect"] ==
@@ -399,7 +404,9 @@ public:
     {
         using boost::asio::buffer_size;
         header_parser<isRequest, fields> p;
-        parse(in, sb, p);
+        auto const bytes_used =
+            parse_some(in, sb, p);
+        sb.consume(bytes_used);
         write(out, p.get());
         switch(p.state())
         {
@@ -449,7 +456,6 @@ public:
         case parse_state::chunk_header:
         {
             error_code ec;
-            p.resume();
             for(;;)
             {
                 BEAST_EXPECT(p.state() ==

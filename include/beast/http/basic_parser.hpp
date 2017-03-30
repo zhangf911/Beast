@@ -292,34 +292,31 @@ class basic_parser
         bool OtherIsDirect, class OtherDerived>
     friend class basic_parser;
 
-    // When set, algorithms will stop reading data
-    static unsigned constexpr flagPaused                = 1<<  0;
-
     // Message will be complete after reading header
-    static unsigned constexpr flagSkipBody              = 1<<  1;
+    static unsigned constexpr flagSkipBody              = 1<<  0;
 
 
 
-    static unsigned constexpr flagOnBody                = 1<<  2;
+    static unsigned constexpr flagOnBody                = 1<<  1;
 
     // The parser has read at least one byte
-    static unsigned constexpr flagGotSome               = 1<<  3;
+    static unsigned constexpr flagGotSome               = 1<<  2;
 
     // Message semantics indicate a body is expected.
     // cleared if flagSkipBody set
     //
-    static unsigned constexpr flagHasBody               = 1<<  4;
+    static unsigned constexpr flagHasBody               = 1<<  3;
 
-    static unsigned constexpr flagHTTP11                = 1<<  5;
-    static unsigned constexpr flagNeedEOF               = 1<<  6;
-    static unsigned constexpr flagExpectCRLF            = 1<<  7;
-    static unsigned constexpr flagFinalChunk            = 1<<  8;
-    static unsigned constexpr flagConnectionClose       = 1<<  9;
-    static unsigned constexpr flagConnectionUpgrade     = 1<< 10;
-    static unsigned constexpr flagConnectionKeepAlive   = 1<< 11;
-    static unsigned constexpr flagContentLength         = 1<< 12;
-    static unsigned constexpr flagChunked               = 1<< 13;
-    static unsigned constexpr flagUpgrade               = 1<< 14;
+    static unsigned constexpr flagHTTP11                = 1<<  4;
+    static unsigned constexpr flagNeedEOF               = 1<<  5;
+    static unsigned constexpr flagExpectCRLF            = 1<<  6;
+    static unsigned constexpr flagFinalChunk            = 1<<  7;
+    static unsigned constexpr flagConnectionClose       = 1<<  8;
+    static unsigned constexpr flagConnectionUpgrade     = 1<<  9;
+    static unsigned constexpr flagConnectionKeepAlive   = 1<< 10;
+    static unsigned constexpr flagContentLength         = 1<< 11;
+    static unsigned constexpr flagChunked               = 1<< 12;
+    static unsigned constexpr flagUpgrade               = 1<< 13;
 
     std::uint64_t len_;     // size of chunk or body
     std::unique_ptr<char[]> buf_;
@@ -376,25 +373,6 @@ public:
     {
         return state_;
     }
-
-    /** Returns `true` if the parser requires additional input.
-
-        When this function returns `true`, the caller should
-        perform one of the following actions in order for the
-        parser to make forward progress:
-
-        @li Commit additional bytes to the stream buffer, then
-            call @ref write .
-
-        @li Call @ref write_eof to indicate that the stream
-            will never produce additional input.
-
-        @li Call @ref copy_body, @ref prepare_body, and
-            @ref commit_body zero or more times to process bytes
-            belonging to the message body.
-    */
-    bool
-    need_more() const;
 
     /// Returns `true` if the parser has received at least one byte of input.
     bool
@@ -465,25 +443,6 @@ public:
         return (f_ & flagChunked) != 0;
     }
 
-    /** Pause the parser.
-    */
-    void
-    pause()
-    {
-        f_ |= flagPaused;
-    }
-
-    /** Continue parsing the message body if paused.
-
-        This function will modify the parser state to resume
-        parsing after begin pause.
-    */
-    void
-    resume()
-    {
-        f_ &= ~flagPaused;
-    }
-
     /** Write part of a buffer sequence to the parser.
 
         This function attempts to parse the HTTP message
@@ -496,10 +455,6 @@ public:
         requires additional input. In this case the caller
         should append additional bytes to the input buffer
         sequence and call @ref write again.
-
-        The function @ref need_more will return `true` in
-        the case where additional bytes are needed for the
-        parser to make forward progress.
 
         @param buffers An object meeting the requirements of
         @b ConstBufferSequence that represents the message.

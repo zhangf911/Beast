@@ -167,7 +167,7 @@ public:
                 break;
             buffer = buffer + n;
             used += n;
-            if(! parser.need_more())
+            if(parser.is_complete())
                 break;
             if(buffer_size(buffer) == 0)
                 break;
@@ -197,7 +197,7 @@ public:
                 break;
             cb.consume(n);
             used += n;
-            if(! parser.need_more())
+            if(parser.is_complete())
                 break;
             if(buffer_size(cb) == 0)
                 break;
@@ -286,7 +286,6 @@ public:
                 error_code ec;
                 feed(b1, p, ec);
                 BEAST_EXPECTS(! ec, ec.message());
-                BEAST_EXPECT(p.need_more());
                 feed(buffer_cat(b1, b2), p, ec);
                 BEAST_EXPECTS(! ec, ec.message());
                 BEAST_EXPECT(p.is_complete());
@@ -307,7 +306,6 @@ public:
                 error_code ec;
                 feed(b1, p, ec);
                 BEAST_EXPECTS(! ec, ec.message());
-                BEAST_EXPECT(p.need_more());
                 ec = {};
                 feed(buffer_cat(b1, b2), p, ec);
                 BEAST_EXPECTS(! ec, ec.message());
@@ -332,7 +330,6 @@ public:
                 "*";
             feed(buffer(s), p, ec);
             BEAST_EXPECTS(! ec, ec.message());
-            BEAST_EXPECT(! p.need_more());
             BEAST_EXPECT(p.is_complete());
             BEAST_EXPECT(p.got_on_begin);
             BEAST_EXPECT(p.got_on_field);
@@ -352,7 +349,6 @@ public:
                 "*";
             feed(buffer(s), p, ec);
             BEAST_EXPECTS(! ec, ec.message());
-            BEAST_EXPECT(! p.need_more());
             BEAST_EXPECT(p.is_complete());
             BEAST_EXPECT(p.got_on_begin);
             BEAST_EXPECT(p.got_on_field);
@@ -905,6 +901,7 @@ public:
     void
     testSplit()
     {
+#if 0
         streambuf sb;
         sb << 
             "POST / HTTP/1.1\r\n"
@@ -937,6 +934,7 @@ public:
         BEAST_EXPECT(p.got_on_complete);
         BEAST_EXPECT(p.is_complete());
         BEAST_EXPECT(p.body == "*****");
+#endif
     }
 
     void

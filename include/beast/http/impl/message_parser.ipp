@@ -30,7 +30,6 @@ message_parser(header_parser<
             isRequest, Fields>>&>(parser)))
     , m_(parser.release(), std::forward<Args>(args)...)
 {
-    this->resume();
 }
 
 } // http

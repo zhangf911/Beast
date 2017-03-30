@@ -87,7 +87,7 @@ public:
                 break;
             cb.consume(n);
             used += n;
-            if(! parser.need_more())
+            if(parser.is_complete())
                 break;
             if(buffer_size(cb) == 0)
                 break;
