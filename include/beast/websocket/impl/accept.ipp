@@ -191,7 +191,7 @@ public:
     }
 
     void operator()(error_code ec,
-        std::size_t bytes_transferred, bool again = true);
+        std::size_t bytes_used, bool again = true);
 
     friend
     void* asio_handler_allocate(
@@ -229,42 +229,36 @@ template<class Handler>
 void
 stream<NextLayer>::accept_op<Handler>::
 operator()(error_code ec,
-    std::size_t bytes_transferred, bool again)
+    std::size_t bytes_used, bool again)
 {
-    beast::detail::ignore_unused(bytes_transferred);
     auto& d = *d_;
     d.cont = d.cont || again;
-    while(! ec && d.state != 99)
+    if(ec)
+        goto upcall;
+    switch(d.state)
     {
-        switch(d.state)
-        {
-        case 0:
-            // read message
-            d.state = 1;
-            http::async_parse(d.ws.next_layer(),
-                d.ws.stream_.buffer(), d.p,
-                    std::move(*this));
-            return;
+    case 0:
+        // read message
+        d.state = 1;
+        http::async_parse_some(d.ws.next_layer(),
+            d.ws.stream_.buffer(), d.p,
+                std::move(*this));
+        return;
 
-        // got message
-        case 1:
-        {
-            if(d.p.need_more())
-            {
-                ec = http::error::partial_message;
-                goto upcall;
-            }
-            // Arguments from our state must be
-            // moved to the stack before releasing
-            // the handler.
-            auto& ws = d.ws;
-            auto h = d.p.release();
-            response_op<Handler>{
-                d_.release_handler(),
-                    ws, std::move(h), true};
-            return;
-        }
-        }
+    case 1:
+    {
+        BOOST_ASSERT(d.p.got_header());
+        d.ws.stream_.buffer().consume(bytes_used);
+        // Arguments from our state must be
+        // moved to the stack before releasing
+        // the handler.
+        auto& ws = d.ws;
+        auto m = d.p.release();
+        response_op<Handler>{
+            d_.release_handler(),
+                ws, std::move(m), true};
+        return;
+    }
     }
 upcall:
     d_.invoke(ec);
@@ -382,15 +376,12 @@ accept(ConstBufferSequence const& buffers, error_code& ec)
         stream_.buffer().prepare(
             buffer_size(buffers)), buffers));
     http::header_parser<true, http::fields> p;
-    http::parse(next_layer(), stream_.buffer(), p, ec);
+    auto const bytes_used = http::parse_some(
+        next_layer(), stream_.buffer(), p, ec);
     if(ec)
         return;
-    if(p.need_more())
-    {
-        // VFALCO Is this the right error?
-        ec = http::error::partial_message;
-        return;
-    }
+    BOOST_ASSERT(p.got_header());
+    stream_.buffer().consume(bytes_used);
     accept(p.get(), ec);
 }
 
