@@ -935,9 +935,8 @@ parse_chunk_header(char const* p,
             {
                 // VFALCO We need to parse the chunk
                 // extension to validate it here.
-                impl().on_chunk(v,
-                    make_string(
-                        p, term - 2), ec);
+                ext_ = make_string(p, term - 2);
+                impl().on_chunk(v, ext_, ec);
                 if(ec)
                     return 0;
             }
@@ -985,8 +984,8 @@ parse_chunk_header(char const* p,
 
     if(*p == ';')
     {
-        impl().on_chunk(0,
-            make_string(p, first + x_), ec);
+        ext_ = make_string(p, first + x_);
+        impl().on_chunk(0, ext_, ec);
         if(ec)
             return 0;
         p = first + x_;
@@ -1015,8 +1014,8 @@ parse_body(char const* p,
     std::size_t n, error_code& ec)
 {
     n = beast::detail::clamp(len_, n);
-    impl().on_data(
-        boost::string_ref{p, n}, ec);
+    body_ = boost::string_ref{p, n};
+    impl().on_data(body_, ec);
     if(ec)
         return 0;
     len_ -= n;
@@ -1036,8 +1035,8 @@ basic_parser<isRequest, isDirect, Derived>::
 parse_body_to_eof(char const* p,
     std::size_t n, error_code& ec)
 {
-    impl().on_data(
-        boost::string_ref{p, n}, ec);
+    body_ = boost::string_ref{p, n};
+    impl().on_data(body_, ec);
     if(ec)
         return 0;
     return n;
@@ -1051,8 +1050,8 @@ parse_chunk_body(char const* p,
     std::size_t n, error_code& ec)
 {
     n = beast::detail::clamp(len_, n);
-    impl().on_data(
-        boost::string_ref{p, n}, ec);
+    body_ = boost::string_ref{p, n};
+    impl().on_data(body_, ec);
     if(ec)
         return 0;
     len_ -= n;

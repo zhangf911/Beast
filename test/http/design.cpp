@@ -283,73 +283,6 @@ public:
                 is, sb.prepare(5 - sb.size())));
             BEAST_EXPECT(sb.size() == 5);
         }
-
-        // chunked
-        {
-            test::string_istream is{ios_,
-                "GET / HTTP/1.1\r\n"
-                "Transfer-Encoding: chunked\r\n"
-                "\r\n"
-                "5;x;y=1;z=\"-\"\r\n*****\r\n"
-                "3\r\n---\r\n"
-                "1\r\n+\r\n"
-                "0\r\nMD5:xxx\r\n\r\n"
-            };
-
-            header_parser<true, fields> p;
-            flat_streambuf sb{36};
-
-            // Read the header
-            auto const bytes_used =
-                parse_some(is, sb, p);
-            sb.consume(bytes_used);
-            BEAST_EXPECT(p.state() ==
-                parse_state::chunk_header);
-            
-            error_code ec;
-
-            // Chunk 1
-            parse_some(is, sb, p);
-            BEAST_EXPECT(p.state() ==
-                parse_state::chunk_body);
-            BEAST_EXPECT(p.size() == 5);
-            if(sb.size() < 5)
-                sb.commit(boost::asio::read(
-                    is, sb.prepare(5 - sb.size())));
-            sb.consume(5);
-            p.consume_body(ec);
-            BEAST_EXPECTS(! ec, ec.message());
-
-            // Chunk 2
-            parse_some(is, sb, p);
-            BEAST_EXPECT(p.state() ==
-                parse_state::chunk_body);
-            BEAST_EXPECT(p.size() == 3);
-            if(sb.size() < 3)
-                sb.commit(boost::asio::read(
-                    is, sb.prepare(3 - sb.size())));
-            sb.consume(3);
-            p.consume_body(ec);
-            BEAST_EXPECTS(! ec, ec.message());
-
-            // Chunk 3
-            parse_some(is, sb, p);
-            BEAST_EXPECT(p.state() ==
-                parse_state::chunk_body);
-            BEAST_EXPECT(p.size() == 1);
-            // Read 1 body byte
-            if(sb.size() < 1)
-                sb.commit(boost::asio::read(
-                    is, sb.prepare(1 - sb.size())));
-            sb.consume(1);
-            p.consume_body(ec);
-            BEAST_EXPECTS(! ec, ec.message());
-
-            // Final chunk
-            parse_some(is, sb, p);
-            BEAST_EXPECT(p.is_complete());
-            BEAST_EXPECT(p.get().fields["MD5"] == "xxx");
-        }
     }
 
     //--------------------------------------------------------------------------
@@ -402,96 +335,50 @@ public:
         DynamicBuffer& sb,
         SyncReadStream& in)
     {
-        using boost::asio::buffer_size;
-        header_parser<isRequest, fields> p;
-        auto const bytes_used =
-            parse_some(in, sb, p);
-        sb.consume(bytes_used);
-        write(out, p.get());
-        switch(p.state())
+        flat_streambuf buffer{4096, 4096}; // 4K size, 4K limit
+        header_parser<isRequest, fields> parser;
+        error_code ec;
+        do
         {
-        case parse_state::body:
-        {
-            auto remain = p.size();
-            while(remain > 0)
+      	    auto const state0 = parser.state();
+            auto const bytes_parsed =
+                parse_some(in, buffer, parser, ec);
+            BEAST_EXPECTS(! ec, ec.message());
+            switch(state0)
             {
-                if(sb.size() == 0)
-                    sb.commit(in.read_some(sb.prepare(
-                        read_size_helper(sb, 65536))));
-                auto const limit =
-                    beast::detail::clamp(remain);
-                auto const bytes_transferred =
-                    out.write_some(prepare_buffers(
-                        limit, sb.data()));
-                sb.consume(bytes_transferred);
-                remain -= bytes_transferred;
-            }
-            break;
-        }
-        case parse_state::body_to_eof:
-        {
-            error_code ec;
-            for(;;)
+            case parse_state::header:
             {
-                if(sb.size() == 0)
-                {
-                    auto const n = in.read_some(
-                        sb.prepare(read_size_helper(
-                            sb, 65536)), ec);
-                    if(ec == boost::asio::error::eof)
-                    {
-                        ec = {};
-                        break;
-                    }
-                    if(! BEAST_EXPECTS(! ec, ec.message()))
-                        return;
-                    sb.commit(n);
-                }
-                auto const bytes_transferred =
-                    out.write_some(sb.data());
-                sb.consume(bytes_transferred);
+                BEAST_EXPECT(parser.got_header());
+                write(out, parser.get());
+                break;
             }
-            break;
-        }
-        case parse_state::chunk_header:
-        {
-            error_code ec;
-            for(;;)
-            {
-                BEAST_EXPECT(p.state() ==
-                    parse_state::chunk_header);
-                parse_some(in, sb, p);
-                if(p.is_complete())
-                    break;
-                BEAST_EXPECT(p.state() ==
-                    parse_state::chunk_body);
-                auto remain = p.size();
-                BOOST_ASSERT(remain > 0);
-                while(remain > 0)
-                {
-                    if(sb.size() == 0)
-                        sb.commit(in.read_some(sb.prepare(
-                            read_size_helper(sb, 65536))));
-                    auto const limit =
-                        beast::detail::clamp(remain);
-                    auto const b =
-                        prepare_buffers(limit, sb.data());
-                    auto const n = buffer_size(b);
-                    boost::asio::write(out,
-                        chunk_encode(false, b));
-                    sb.consume(n);
-                    remain -= n;
-                }
-                p.consume_body(ec);
-            }
-            boost::asio::write(out,
-                chunk_encode_final());
-            break;
-        }
 
-        default:
-            break;
+            case parse_state::chunk_header:
+            {
+                // inspect parser.chunk_extension() here
+                if(parser.is_complete())
+                    boost::asio::write(out,
+                        chunk_encode_final());
+                break;
+            }
+
+            case parse_state::body:
+            case parse_state::body_to_eof:
+            case parse_state::chunk_body:
+            {
+                auto const body = parser.body();
+                boost::asio::write(out, chunk_encode(
+                    false, boost::asio::buffer(
+                        body.data(), body.size())));
+                break;
+            }
+          
+            case parse_state::complete:
+                break;
+            }
+            buffer.consume(bytes_parsed);
         }
+        while(! parser.is_complete());
     }
 
     void
@@ -554,115 +441,50 @@ public:
     void
     doFixedRead(SyncReadStream& stream, BodyCallback const& cb)
     {
-        flat_streambuf buf{4096, 4096}; // 4K size, 4K limit
-        header_parser<isRequest, fields> p;
+        flat_streambuf buffer{4096, 4096}; // 4K size, 4K limit
+        header_parser<isRequest, fields> parser;
         error_code ec;
-        for(;;)
+        do
         {
-            switch(p.state())
+      	    auto const state0 = parser.state();
+            auto const bytes_parsed =
+                parse_some(stream, buffer, parser);
+            switch(state0)
             {
             case parse_state::header:
+            {
+                BEAST_EXPECT(parser.got_header());
+                break;
+            }
+
             case parse_state::chunk_header:
             {
-                auto const bytes_transferred =
-                    stream.read_some(buf.prepare(
-                        buf.max_size() - buf.size()), ec);
-                if(ec == boost::asio::error::eof)
-                {
-                    if(! p.got_some())
-                        goto do_complete;
-                    ec = {};
-                    p.write_eof(ec);
-                    BEAST_EXPECTS(! ec, ec.message());
-                }
-                else
-                {   
-                    BEAST_EXPECTS(! ec, ec.message());
-                    buf.commit(bytes_transferred);
-                    auto const used = p.write(buf.data(), ec);
-                    BEAST_EXPECTS(! ec, ec.message());
-                    if(used == 0 && buf.size() == buf.max_size())
-                        throw std::length_error{"buffer overflow"};
-                    buf.consume(used);
-                }
+                // inspect parser.chunk_extension() here
                 break;
             }
 
             case parse_state::body:
+            case parse_state::body_to_eof:
             case parse_state::chunk_body:
             {
-                if(buf.size() > 0)
-                {
-                    auto const len =
-                        (std::min)(beast::detail::clamp(
-                            p.size()), buf.size());
-                    cb(buf, len);
-                    p.consume(len);
-                }
-                else
-                {
-                    BOOST_ASSERT(p.size() > 0);
-                    auto const len = (std::min)(
-                        beast::detail::clamp(p.size()),
-                            buf.max_size() - buf.size());
-                    auto const bytes_transferred =
-                        stream.read_some(buf.prepare(len), ec);
-                    if(ec == boost::asio::error::eof)
-                    {
-                        ec = {};
-                        p.write_eof(ec);
-                        BEAST_EXPECTS(! ec, ec.message());
-                    }
-                    else
-                    {
-                        BEAST_EXPECTS(! ec, ec.message());
-                        buf.commit(bytes_transferred);
-                    }
-                }
+                cb(parser.body());
                 break;
             }
-
-            case parse_state::body_to_eof:
-            {
-                if(buf.size() > 0)
-                {
-                    cb(buf, buf.size());
-                }
-                auto const bytes_transferred =
-                    stream.read_some(buf.prepare(
-                        buf.max_size() - buf.size()), ec);
-                if(ec == boost::asio::error::eof)
-                {
-                    ec = {};
-                    p.write_eof(ec);
-                    BEAST_EXPECTS(! ec, ec.message());
-                }
-                else
-                {
-                    BEAST_EXPECTS(! ec, ec.message());
-                    buf.commit(bytes_transferred);
-                }
-                break;
-            }
-
+          
             case parse_state::complete:
-                // all finished!
-                goto do_complete;
+                break;
             }
+            buffer.consume(bytes_parsed);
         }
-    do_complete:
-        ;
+        while(! parser.is_complete());
     }
     
     struct bodyHandler
     {
-        template<class DynamicBuffer>
         void
-        operator()(DynamicBuffer& buf, std::size_t len) const
+        operator()(boost::string_ref const& body) const
         {
             // called for each piece of the body,
-            // There are `size` bytes in buf.data()
-            buf.consume(len);
         }
     };
 
@@ -709,96 +531,6 @@ public:
             doFixedRead<true>(is, bodyHandler{});
         }
     }
-
-    //--------------------------------------------------------------------------
-    /*
-        Read the request header, then read the request body content using
-        a fixed-size buffer, i.e. read the body in chunks of 4k for instance.
-        The end of the body should be indicated somehow and chunk-encoding
-        should be decoded by beast.
-
-        This is an improved, simpler version that uses less code.
-    */
-    // VFALCO This has issues...
-#if 0
-    template<bool isRequest, class SyncReadStream>
-    void
-    doFixedRead2(SyncReadStream& stream)
-    {
-        flat_streambuf buffer{4096, 4096}; // 4K size, 4K limit
-        header_parser<isRequest, fields> parser;
-        error_code ec;
-        do
-        {
-            switch(parser.state())
-            {
-            case parse_state::header:
-                parse_some(stream, buffer, parser, ec);
-                BEAST_EXPECTS(! ec, ec.message());
-                BEAST_EXPECT(parser.got_header());
-                // We can look at the header now
-                break;
-
-            case parse_state::chunk_header:
-                parse_some(stream, buffer, parser, ec);
-                BEAST_EXPECTS(! ec, ec.message());
-                break;
-
-            case parse_state::body:
-            case parse_state::body_to_eof:
-            case parse_state::chunk_body:
-                parse_some(stream, buffer, parser, ec);
-                // inspect parser.body() here
-                break;
-            }
-        }
-        while(! parser.is_complete());
-    }
-
-    void
-    testFixedRead2()
-    {
-        using boost::asio::buffer;
-        using boost::asio::buffer_cast;
-        using boost::asio::buffer_size;
-
-        // Content-Length
-        {
-            test::string_istream is{ios_,
-                "GET / HTTP/1.1\r\n"
-                "Content-Length: 1\r\n"
-                "\r\n"
-                "*"
-            };
-            doFixedRead2<true>(is);
-        }
-
-        // end of file
-        {
-            test::string_istream is{ios_,
-                "HTTP/1.1 200 OK\r\n"
-                "\r\n" // 19 byte header
-                "*****"
-            };
-            doFixedRead2<false>(is);
-        }
-
-        // chunked
-        {
-            test::string_istream is{ios_,
-                "GET / HTTP/1.1\r\n"
-                "Transfer-Encoding: chunked\r\n"
-                "\r\n"
-                "5;x;y=1;z=\"-\"\r\n*****\r\n"
-                "3\r\n---\r\n"
-                "1\r\n+\r\n"
-                "0\r\n\r\n",
-                2 // max_read
-            };
-            doFixedRead2<true>(is);
-        }
-    }
-#endif
 
     //--------------------------------------------------------------------------
 

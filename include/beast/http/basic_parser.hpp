@@ -325,6 +325,8 @@ class basic_parser
     std::size_t x_;         // scratch variable
     unsigned f_ = 0;        // flags
     parse_state state_ = parse_state::header;
+    boost::string_ref ext_;
+    boost::string_ref body_;
 
 public:
     /// Copy constructor (disallowed)
@@ -510,6 +512,42 @@ public:
             state_ == parse_state::body ||
             state_ == parse_state::chunk_body);
         return len_;
+    }
+
+    /** Returns the body data parsed in the last call to @ref write.
+
+        This buffer is invalidated after any call to @ref write
+        or @ref write_eof.
+
+        @note If the last call to @ref write came from the input
+        area of a @b DynamicBuffer object, a call to the dynamic
+        buffer's `consume` function may invalidate this return
+        value.
+    */
+    boost::string_ref const&
+    body() const
+    {
+        // This function not available when isDirect==true
+        static_assert(! isDirect, "");
+        return body_;
+    }
+
+    /** Returns the chunk extension parsed in the last call to @ref write.
+
+        This buffer is invalidated after any call to @ref write
+        or @ref write_eof.
+
+        @note If the last call to @ref write came from the input
+        area of a @b DynamicBuffer object, a call to the dynamic
+        buffer's `consume` function may invalidate this return
+        value.
+    */
+    boost::string_ref const&
+    chunk_extension() const
+    {
+        // This function not available when isDirect==true
+        static_assert(! isDirect, "");
+        return ext_;
     }
 
     /** Returns the optional value of Content-Length if known.
