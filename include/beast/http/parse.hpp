@@ -51,11 +51,15 @@ namespace http {
 
     @param parser The parser to use.
 
+    @return The number of bytes processed from the dynamic
+    buffer. The caller should remove these bytes by calling
+    `consume` on the dynamic buffer.
+
     @throws system_error Thrown on failure.
 */
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, bool isDirect, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, isDirect, Derived>& parser);
 
@@ -95,28 +99,30 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     @param parser The parser to use.
 
     @param ec Set to the error, if any occurred.
+
+    @return The number of bytes processed from the dynamic
+    buffer. The caller should remove these bytes by calling
+    `consume` on the dynamic buffer.
 */
 #if GENERATING_DOCS
-
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, bool isDirect, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, isDirect, Derived>& parser,
         error_code& ec);
-
 #else
 
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, true, Derived>& parser,
         error_code& ec);
 
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, false, Derived>& parser,
         error_code& ec);
@@ -150,6 +156,10 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     end of the object being parsed. This additional data is stored
     in the stream buffer, which may be used in subsequent calls.
 
+    The completion handler will be called with the number of bytes
+    processed from the dynamic buffer. The caller should remove
+    these bytes by calling `consume` on the dynamic buffer.
+
     @param stream The stream from which the data is to be read.
     The type must support the @b AsyncReadStream concept.
 
@@ -165,7 +175,8 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     completes. Copies will be made of the handler as required.
     The equivalent function signature of the handler must be:
     @code void handler(
-        error_code const& error // result of operation
+        error_code const& error,    // result of operation
+        std::size_t bytes_used      // the number of bytes to consume
     ); @endcode
     Regardless of whether the asynchronous operation completes
     immediately or not, the handler will not be invoked from within
@@ -186,7 +197,7 @@ async_parse_some(AsyncReadStream& stream,
 template<class AsyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived, class ReadHandler>
 typename async_completion<
-    ReadHandler, void(error_code)>::result_type
+    ReadHandler, void(error_code, std::size_t)>::result_type
 async_parse_some(AsyncReadStream& stream,
     DynamicBuffer& dynabuf, basic_parser<
         isRequest, true, Derived>& parser,
@@ -195,7 +206,7 @@ async_parse_some(AsyncReadStream& stream,
 template<class AsyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived, class ReadHandler>
 typename async_completion<
-    ReadHandler, void(error_code)>::result_type
+    ReadHandler, void(error_code, std::size_t)>::result_type
 async_parse_some(AsyncReadStream& stream,
     DynamicBuffer& dynabuf, basic_parser<
         isRequest, false, Derived>& parser,

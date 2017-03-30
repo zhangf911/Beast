@@ -151,7 +151,7 @@ write_eof(error_code& ec)
 
 template<bool isRequest, bool isDirect, class Derived>
 template<class DynamicBuffer>
-void
+std::size_t
 basic_parser<isRequest, isDirect, Derived>::
 copy_body(DynamicBuffer& dynabuf)
 {
@@ -177,7 +177,7 @@ copy_body(DynamicBuffer& dynabuf)
         dynabuf.consume(buffer_copy(
             buffers, dynabuf.data()));
         impl().on_commit(n);
-        break;
+        return n;
     }
 
     default:
@@ -189,9 +189,8 @@ copy_body(DynamicBuffer& dynabuf)
         BOOST_ASSERT(buffer_size(buffers) > 0);
         auto const n = buffer_copy(
             buffers, dynabuf.data());
-        dynabuf.consume(n);
         commit_body(n);
-        break;
+        return n;
     }
     }
 }

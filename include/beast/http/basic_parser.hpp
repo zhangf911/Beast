@@ -575,9 +575,13 @@ public:
 
         @note This member function is only available when
         `isDirect==true`.
+
+        @return The number of bytes processed from the dynamic
+        buffer. The caller should remove these bytes by calling
+        `consume` on the buffer.
     */
     template<class DynamicBuffer>
-    void
+    std::size_t
     copy_body(DynamicBuffer& dynabuf);
 
     /** Returns a set of buffers for storing body data.

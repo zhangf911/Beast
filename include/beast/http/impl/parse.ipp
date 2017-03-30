@@ -33,11 +33,11 @@ class parse_some_buffer_op
         Stream& s;
         DynamicBuffer& db;
         basic_parser<isRequest, isDirect, Derived>& p;
-        parse_state saved_state;
         boost::optional<typename
             DynamicBuffer::mutable_buffers_type> mb;
         boost::optional<typename
             Derived::mutable_buffers_type> bb;
+        std::size_t bytes_used;
         int state = 0;
 
         data(Handler& handler, Stream& s_, DynamicBuffer& db_,
@@ -47,7 +47,6 @@ class parse_some_buffer_op
             , s(s_)
             , db(db_)
             , p(p_)
-            , saved_state(p.state())
         {
             BOOST_ASSERT(p.need_more());
         }
@@ -138,20 +137,9 @@ operator()(error_code ec,
         case 1:
         {
             BOOST_ASSERT(d.db.size() > 0);
-            auto const used =
+            d.bytes_used =
                 d.p.write(d.db.data(), ec);
-            if(ec)
-            {
-                // call handler
-                if(d.state == 1)
-                    goto upcall;
-                d.state = 99;
-                d.s.get_io_service().post(
-                    bind_handler(std::move(*this), ec, 0));
-                return;
-            }
-            d.db.consume(used);
-            if(d.p.state() != d.saved_state)
+            if(d.bytes_used > 0 || ec)
             {
                 // call handler
                 if(d.state == 1)
@@ -195,6 +183,7 @@ operator()(error_code ec,
             if(ec == boost::asio::error::eof)
             {
                 BOOST_ASSERT(bytes_transferred == 0);
+                d.bytes_used = 0;
                 if(! d.p.got_some())
                     goto upcall;
                 // caller sees EOF on next read.
@@ -207,6 +196,7 @@ operator()(error_code ec,
             }
             else if(ec)
             {
+                d.bytes_used = 0;
                 goto upcall;
             }
             BOOST_ASSERT(bytes_transferred > 0);
@@ -216,7 +206,9 @@ operator()(error_code ec,
         }
     }
 upcall:
-    d_.invoke(ec);
+    // can't pass any members of `d` otherwise UB
+    auto const bytes_used = d.bytes_used;
+    d_.invoke(ec, bytes_used);
 }
 
 //------------------------------------------------------------------------------
@@ -233,6 +225,7 @@ class parse_some_body_op
         basic_parser<isRequest, true, Derived>& p;
         boost::optional<typename
             Derived::mutable_buffers_type> mb;
+        std::size_t bytes_used;
         int state = 0;
 
         data(Handler& handler, Stream& s_, DynamicBuffer& db_,
@@ -323,7 +316,7 @@ operator()(error_code ec,
         case 0:
             if(d.db.size() > 0)
             {
-                d.p.copy_body(d.db);
+                d.bytes_used = d.p.copy_body(d.db);
                 // call handler
                 d.state = 99;
                 d.s.get_io_service().post(
@@ -339,6 +332,7 @@ operator()(error_code ec,
             return;
 
         case 1:
+            d.bytes_used = 0;
             if(ec == boost::asio::error::eof)
             {
                 BOOST_ASSERT(bytes_transferred == 0);
@@ -348,21 +342,16 @@ operator()(error_code ec,
                 if(ec)
                     goto upcall;
                 BOOST_ASSERT(d.p.is_complete());
-                goto upcall;
             }
             else if(! ec)
             {
                 d.db.commit(bytes_transferred);
-                goto upcall;
             }
-            else
-            {
-                goto upcall;
-            }
+            goto upcall;
         }
     }
 upcall:
-    d_.invoke(ec);
+    d_.invoke(ec, d.bytes_used);
 }
 
 //------------------------------------------------------------------------------
@@ -404,11 +393,12 @@ public:
         : d_(std::forward<DeducedHandler>(h),
             s, std::forward<Args>(args)...)
     {
-        (*this)(error_code{}, false);
+        (*this)(error_code{}, 0, false);
     }
 
     void
-    operator()(error_code const& ec, bool again = true);
+    operator()(error_code const& ec,
+        std::size_t bytes_used, bool again = true);
 
     friend
     void*
@@ -454,13 +444,18 @@ template<class Stream, class DynamicBuffer,
 void
 parse_op<Stream, DynamicBuffer,
     isRequest, isDirect, Derived, Handler>::
-operator()(error_code const& ec, bool again)
+operator()(error_code const& ec,
+    std::size_t bytes_used, bool again)
 {
     auto& d = *d_;
     d.cont = d.cont || again;
-    if(! ec && d.p.need_more())
-        return async_parse_some(
-            d.s, d.db, d.p, std::move(*this));
+    if(! ec)
+    {
+        d.db.consume(bytes_used);
+        if(d.p.need_more())
+            return async_parse_some(
+                d.s, d.db, d.p, std::move(*this));
+    }
     d_.invoke(ec);
 }
 
@@ -469,25 +464,22 @@ operator()(error_code const& ec, bool again)
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, bool isDirect, class Derived>
 inline
-void
+std::size_t
 parse_some_buffer(
     SyncReadStream& stream, DynamicBuffer& dynabuf,
         basic_parser<isRequest, isDirect, Derived>& parser,
             error_code& ec)
 {
-    auto const saved_state = parser.state();
+    std::size_t bytes_used;
     if(dynabuf.size() == 0)
         goto do_read;
     for(;;)
     {
-        {
-            auto const used =
-                parser.write(dynabuf.data(), ec);
-            if(ec)
-                return;
-            dynabuf.consume(used);
-        }
-        if(parser.state() != saved_state)
+        bytes_used = parser.write(
+            dynabuf.data(), ec);
+        if(ec)
+            return 0;
+        if(bytes_used > 0)
             goto do_finish;
     do_read:
         boost::optional<typename
@@ -502,74 +494,68 @@ parse_some_buffer(
         catch(std::length_error const&)
         {
             ec = error::buffer_overflow;
-            return;
+            return 0;
         }
         auto const bytes_transferred =
             stream.read_some(*mb, ec);
         if(ec == boost::asio::error::eof)
         {
             BOOST_ASSERT(bytes_transferred == 0);
+            bytes_used = 0;
             if(parser.got_some())
             {
                 // caller sees EOF on next read
                 ec = {};
                 parser.write_eof(ec);
                 if(ec)
-                    return;
+                    return 0;
                 BOOST_ASSERT(parser.is_complete());
             }
             break;
         }
         else if(ec)
         {
-            return;
+            return 0;
         }
         BOOST_ASSERT(bytes_transferred > 0);
         dynabuf.commit(bytes_transferred);
     }
 do_finish:
-    ;
+    return bytes_used;
 }
 
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived>
 inline
-void
+std::size_t
 parse_some_body(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, true, Derived>& parser,
         error_code& ec)
 {
-    if(dynabuf.size() == 0)
+    if(dynabuf.size() > 0)
+        return parser.copy_body(dynabuf);
+    boost::optional<typename
+        Derived::mutable_buffers_type> mb;
+    // VFALCO Need try/catch for std::length_error here
+    parser.prepare_body(mb, 65536);
+    auto const bytes_transferred =
+        stream.read_some(*mb, ec);
+    if(ec == boost::asio::error::eof)
     {
-        boost::optional<typename
-            Derived::mutable_buffers_type> mb;
-        // VFALCO Need try/catch for std::length_error here
-        parser.prepare_body(mb, 65536);
-        auto const bytes_transferred =
-            stream.read_some(*mb, ec);
-        if(ec == boost::asio::error::eof)
-        {
-            BOOST_ASSERT(bytes_transferred == 0);
-            // caller sees EOF on next read
-            ec = {};
-            parser.write_eof(ec);
-            if(ec)
-                return;
-            BOOST_ASSERT(parser.is_complete());
-        }
-        else if(! ec)
-        {
-            parser.commit_body(bytes_transferred);
-        }
-        else
-        {
-            return;
-        }
+        BOOST_ASSERT(bytes_transferred == 0);
+        // caller sees EOF on next read
+        ec = {};
+        parser.write_eof(ec);
+        if(ec)
+            return 0;
+        BOOST_ASSERT(parser.is_complete());
     }
-    else
+    else if(! ec)
     {
-        parser.copy_body(dynabuf);
+        parser.commit_body(bytes_transferred);
+        return 0;
     }
+    return 0;
 }
 
 } // detail
@@ -578,7 +564,7 @@ parse_some_body(SyncReadStream& stream, DynamicBuffer& dynabuf,
 
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, bool isDirect, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, isDirect, Derived>& parser)
 {
@@ -587,14 +573,16 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     static_assert(is_DynamicBuffer<DynamicBuffer>::value,
         "DynamicBuffer requirements not met");
     error_code ec;
-    parse_some(stream, dynabuf, parser, ec);
+    auto const bytes_used =
+        parse_some(stream, dynabuf, parser, ec);
     if(ec)
         throw system_error{ec};
+    return bytes_used;
 }
 
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, true, Derived>& parser,
         error_code& ec)
@@ -609,26 +597,18 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     {
     case parse_state::header:
     case parse_state::chunk_header:
-    {
-        detail::parse_some_buffer(
+        return detail::parse_some_buffer(
             stream, dynabuf, parser, ec);
-        if(ec)
-            return;
-        break;
-    }
 
     default:
-        detail::parse_some_body(
+        return detail::parse_some_body(
             stream, dynabuf, parser, ec);
-        if(ec)
-            return;
-        break;
     }
 }
 
 template<class SyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived>
-void
+std::size_t
 parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
     basic_parser<isRequest, false, Derived>& parser,
         error_code& ec)
@@ -637,14 +617,14 @@ parse_some(SyncReadStream& stream, DynamicBuffer& dynabuf,
         "SyncReadStream requirements not met");
     static_assert(is_DynamicBuffer<DynamicBuffer>::value,
         "DynamicBuffer requirements not met");
-    detail::parse_some_buffer(
+    return detail::parse_some_buffer(
         stream, dynabuf, parser, ec);
 }
 
 template<class AsyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived, class ReadHandler>
 typename async_completion<
-    ReadHandler, void(error_code)>::result_type
+    ReadHandler, void(error_code, std::size_t)>::result_type
 async_parse_some(AsyncReadStream& stream,
     DynamicBuffer& dynabuf, basic_parser<
         isRequest, true, Derived>& parser,
@@ -655,7 +635,7 @@ async_parse_some(AsyncReadStream& stream,
     static_assert(is_DynamicBuffer<DynamicBuffer>::value,
         "DynamicBuffer requirements not met");
     beast::async_completion<ReadHandler,
-        void(error_code)> completion{handler};
+        void(error_code, std::size_t)> completion{handler};
     switch(parser.state())
     {
     case parse_state::header:
@@ -679,7 +659,7 @@ async_parse_some(AsyncReadStream& stream,
 template<class AsyncReadStream, class DynamicBuffer,
     bool isRequest, class Derived, class ReadHandler>
 typename async_completion<
-    ReadHandler, void(error_code)>::result_type
+    ReadHandler, void(error_code, std::size_t)>::result_type
 async_parse_some(AsyncReadStream& stream,
     DynamicBuffer& dynabuf, basic_parser<
         isRequest, false, Derived>& parser,
@@ -690,7 +670,7 @@ async_parse_some(AsyncReadStream& stream,
     static_assert(is_DynamicBuffer<DynamicBuffer>::value,
         "DynamicBuffer requirements not met");
     beast::async_completion<ReadHandler,
-        void(error_code)> completion{handler};
+        void(error_code, std::size_t)> completion{handler};
     detail::parse_some_buffer_op<AsyncReadStream,
         DynamicBuffer, isRequest, false, Derived,
             decltype(completion.handler)>{
@@ -729,9 +709,11 @@ parse(SyncReadStream& stream, DynamicBuffer& dynabuf,
         "DynamicBuffer requirements not met");
     for(;;)
     {
-        parse_some(stream, dynabuf, parser, ec);
+        auto const bytes_used =
+            parse_some(stream, dynabuf, parser, ec);
         if(ec)
             return;
+        dynabuf.consume(bytes_used);
         if(! parser.need_more())
             break;
     }
