@@ -564,7 +564,7 @@ public:
                 if(ec == boost::asio::error::eof)
                 {
                     if(! p.got_some())
-                        goto do_finish;
+                        goto do_complete;
                     ec = {};
                     p.write_eof(ec);
                     BEAST_EXPECTS(! ec, ec.message());
@@ -641,10 +641,10 @@ public:
 
             case parse_state::complete:
                 // all finished!
-                goto do_finish;
+                goto do_complete;
             }
         }
-    do_finish:
+    do_complete:
         ;
     }
     
@@ -661,7 +661,7 @@ public:
     };
 
     void
-    testFixedBuffer()
+    testFixedRead()
     {
         using boost::asio::buffer;
         using boost::asio::buffer_cast;
@@ -705,6 +705,96 @@ public:
     }
 
     //--------------------------------------------------------------------------
+    /*
+        Read the request header, then read the request body content using
+        a fixed-size buffer, i.e. read the body in chunks of 4k for instance.
+        The end of the body should be indicated somehow and chunk-encoding
+        should be decoded by beast.
+
+        This is an improved, simpler version that uses less code.
+    */
+    // VFALCO This has issues...
+#if 0
+    template<bool isRequest, class SyncReadStream>
+    void
+    doFixedRead2(SyncReadStream& stream)
+    {
+        flat_streambuf buffer{4096, 4096}; // 4K size, 4K limit
+        header_parser<isRequest, fields> parser;
+        error_code ec;
+        do
+        {
+            switch(parser.state())
+            {
+            case parse_state::header:
+                parse_some(stream, buffer, parser, ec);
+                BEAST_EXPECTS(! ec, ec.message());
+                BEAST_EXPECT(parser.got_header());
+                // We can look at the header now
+                break;
+
+            case parse_state::chunk_header:
+                parse_some(stream, buffer, parser, ec);
+                BEAST_EXPECTS(! ec, ec.message());
+                break;
+
+            case parse_state::body:
+            case parse_state::body_to_eof:
+            case parse_state::chunk_body:
+                parse_some(stream, buffer, parser, ec);
+                // inspect parser.body() here
+                break;
+            }
+        }
+        while(! parser.is_complete());
+    }
+
+    void
+    testFixedRead2()
+    {
+        using boost::asio::buffer;
+        using boost::asio::buffer_cast;
+        using boost::asio::buffer_size;
+
+        // Content-Length
+        {
+            test::string_istream is{ios_,
+                "GET / HTTP/1.1\r\n"
+                "Content-Length: 1\r\n"
+                "\r\n"
+                "*"
+            };
+            doFixedRead2<true>(is);
+        }
+
+        // end of file
+        {
+            test::string_istream is{ios_,
+                "HTTP/1.1 200 OK\r\n"
+                "\r\n" // 19 byte header
+                "*****"
+            };
+            doFixedRead2<false>(is);
+        }
+
+        // chunked
+        {
+            test::string_istream is{ios_,
+                "GET / HTTP/1.1\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+                "5;x;y=1;z=\"-\"\r\n*****\r\n"
+                "3\r\n---\r\n"
+                "1\r\n+\r\n"
+                "0\r\n\r\n",
+                2 // max_read
+            };
+            doFixedRead2<true>(is);
+        }
+    }
+#endif
+
+    //--------------------------------------------------------------------------
 
     void
     run()
@@ -714,7 +804,8 @@ public:
         testManualBody();
         testExpect100Continue();
         testRelay();
-        testFixedBuffer();
+        testFixedRead();
+        //testFixedRead2();
     }
 };
 

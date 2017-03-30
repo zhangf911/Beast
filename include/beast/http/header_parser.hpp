@@ -35,6 +35,7 @@ class header_parser
         header_parser<isRequest, Fields>>
 {
     header<isRequest, Fields> h_;
+    boost::string_ref body_;
 
 public:
     using mutable_buffers_type =
@@ -101,6 +102,22 @@ public:
         return std::move(h_);
     }
 
+    /** Returns the body data parsed in the last call to @ref write.
+
+        This buffer is invalidated after any call to @ref write
+        or @ref write_eof.
+
+        @note If the last call to @ref write came from the input
+        area of a @b DynamicBuffer object, a call to the dynamic
+        buffer's `consume` function may invalidate this return
+        value.
+    */
+    boost::string_ref const&
+    body() const
+    {
+        return body_;
+    }
+
 private:
     friend class basic_parser<
         isRequest, false, header_parser>;
@@ -158,6 +175,7 @@ private:
     on_data(boost::string_ref const& s,
         error_code& ec)
     {
+        body_ = s;
     }
 
     void
